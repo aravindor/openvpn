@@ -214,6 +214,13 @@ AC_ARG_ENABLE(
 )
 
 AC_ARG_ENABLE(
+	[hardening],
+	[AS_HELP_STRING([--disable-hardening], [do not add compiler and linker hardening flags like -D_FORTIFY_SOURCE, -fstack-protector-strong and -Wl,-z,now @<:@default=yes@:>@])],
+	,
+	[enable_hardening="yes"]
+)
+
+AC_ARG_ENABLE(
 	[selinux],
 	[AS_HELP_STRING([--enable-selinux], [enable SELinux support @<:@default=no@:>@])],
 	,
@@ -1261,6 +1268,75 @@ fi
 # If coverage is enabled remove -O arguments from CFLAGS
 if test "$enable_code_coverage" = "yes"; then
    [CFLAGS="`echo $CFLAGS | $SED -e 's/-O[a-z0-9]*//g'`"]
+fi
+
+# Hardening flags, a subset of the OpenSSF "Compiler Options Hardening
+# Guide for C and C++". Distribution packages usually get similar flags
+# from their build tools; this gives other builds the same protection.
+# A flag is only used if a small program with a stack buffer and calls to
+# fortified libc functions still compiles and links without any warning
+# (ac_c_werror_flag, as AC_LANG_WERROR sets it). The accepted flags go in
+# front of CFLAGS and LDFLAGS, so a choice made there by the user (e.g.
+# -fno-stack-protector or -Wl,-z,lazy) takes precedence.
+AC_DEFUN([ACL_CHECK_ADD_HARDENING_FLAG], [
+    AC_MSG_CHECKING([whether the toolchain accepts $2])
+    old_hardening_flags="$hardening_$1"
+    hardening_$1="${hardening_$1:+$hardening_$1 }$2"
+    old_cflags="$CFLAGS"
+    old_ldflags="$LDFLAGS"
+    old_werror_flag="$ac_c_werror_flag"
+    CFLAGS="$hardening_cflags $CFLAGS"
+    LDFLAGS="$hardening_ldflags $LDFLAGS"
+    ac_c_werror_flag="yes"
+    AC_LINK_IFELSE([AC_LANG_SOURCE([[$3
+#include <stdio.h>
+#include <string.h>
+int main(int argc, char **argv)
+{
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%s", argv[0]);
+    memcpy(buf, argv[0], (size_t)argc);
+    return buf[0];
+}]])], [hardening_ok="yes"], [hardening_ok="no"; hardening_$1="$old_hardening_flags"])
+    AC_MSG_RESULT([$hardening_ok])
+    CFLAGS="$old_cflags"
+    LDFLAGS="$old_ldflags"
+    ac_c_werror_flag="$old_werror_flag"]
+)
+
+# MinGW is left alone: there -fstack-protector and _FORTIFY_SOURCE can
+# need libssp or a recent mingw-w64 runtime.
+if test "${enable_hardening}" = "yes" -a "${WIN32}" != "yes"; then
+	hardening_cflags=""
+	hardening_ldflags=""
+	# Level 3 needs GCC 12 or clang 9 (glibc warns otherwise), so fall
+	# back to 2. Not added without optimization (glibc warns), when
+	# CPPFLAGS, CFLAGS or the compiler already set another level or
+	# -U_FORTIFY_SOURCE, or for ASan builds, where a fortified function
+	# would abort before ASan can report the overflow.
+	for fortify_level in 3 2; do
+		ACL_CHECK_ADD_HARDENING_FLAG([cflags], [-D_FORTIFY_SOURCE=$fortify_level], [
+#if !defined(_FORTIFY_SOURCE) || _FORTIFY_SOURCE != $fortify_level
+#error "_FORTIFY_SOURCE is set elsewhere"
+#endif
+#if defined(__SANITIZE_ADDRESS__)
+#error "ASan build"
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#error "ASan build"
+#endif
+#endif
+		])
+		test "${hardening_ok}" = "yes" && break
+	done
+	ACL_CHECK_ADD_HARDENING_FLAG([cflags], [-fstack-protector-strong])
+	ACL_CHECK_ADD_HARDENING_FLAG([cflags], [-fstack-clash-protection])
+	ACL_CHECK_ADD_HARDENING_FLAG([cflags], [-fcf-protection=full])
+	ACL_CHECK_ADD_HARDENING_FLAG([cflags], [-mbranch-protection=standard])
+	ACL_CHECK_ADD_HARDENING_FLAG([ldflags], [-Wl,-z,relro])
+	ACL_CHECK_ADD_HARDENING_FLAG([ldflags], [-Wl,-z,now])
+	CFLAGS="${hardening_cflags} ${CFLAGS}"
+	LDFLAGS="${hardening_ldflags} ${LDFLAGS}"
 fi
 
 if test "${enable_pedantic}" = "yes"; then

@@ -45,6 +45,14 @@
 - Support for Mbed TLS 3 is dropped. If you build OpenVPN with the Mbed TLS crypto
   backend, you need to upgrade to Mbed TLS 4.
 
+- configure now adds compiler and linker hardening flags that the toolchain
+  accepts without warnings: `-D_FORTIFY_SOURCE=3` (or 2),
+  `-fstack-protector-strong`, `-fstack-clash-protection`,
+  `-fcf-protection=full` (x86) or `-mbranch-protection=standard` (arm64), and
+  `-Wl,-z,relro -Wl,-z,now`. Flags given in `CPPFLAGS`, `CFLAGS` or `LDFLAGS`
+  take precedence. MinGW builds are not changed. Use `--disable-hardening` to
+  turn this off.
+
 # Overview of changes in 2.7
 
 ## New features
